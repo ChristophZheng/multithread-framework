@@ -1,10 +1,10 @@
 #pragma once
 #include "crt_thread_base.h"
 #include "crt_periodic_cal.h"
-
+#include <future>
 struct thread_unit
 {
-	thread_unit() :at_thread_character_id(0), at_p_thread_obj(nullptr), at_referring_count(0){}
+	thread_unit() :at_thread_character_id(0), at_p_thread_obj(nullptr), at_referring_count(0){} 
 	std::atomic<Type_character_id> at_thread_character_id;
 	std::atomic<void*> at_p_thread_obj;
 	std::atomic<unsigned int> at_referring_count;
@@ -53,7 +53,6 @@ public:
 	template <typename Thread_T>
 	static void unload() noexcept(false)
 	{
-		Type_character_id id = typeid(Thread_T).hash_code();
 		std::lock_guard<std::mutex> lk(thd_pl_weak_lk);
 		int i = -1;
 		Thread_T * p_thd_obj = nullptr;
@@ -62,39 +61,27 @@ public:
 		thread_pool[i].at_p_thread_obj.store(nullptr);
 		while (thread_pool[i].at_referring_count.load()) {};
 		unregist_timer<Thread_T>();
-		period_cal c;
-		c.id = id + 748;
-		timeb t;
-		ftime(&t);
-		c.millis_last_cal = t.millitm;
-		c.second_last_cal = t.time;
-		c.millis_period = 5000;
-		c.times_to_cal = 1;
-		c.caller = [p_thd_obj]()->void {delete p_thd_obj;};
-		p_period_cal->regist(c);
+        delayed_call(1000, [&]()->void{delete p_thd_obj;}, typeid(Thread_T).hash_code() + 1);
 	}
 
 	template <typename Thread_T>
 	static void regist_timer(int millis) noexcept(false)
 	{
+        std::call_once(crt_frame::thread_sentinel_intialized, crt_frame::init_sentinel);
 		Type_character_id id = typeid(Thread_T).hash_code();
-		period_cal c;
-		c.id = id;
-		c.millis_period = millis;
-		c.times_to_cal = -1;
+        timeb t;
+        ftime(&t);
+        period_cal c(id, t.time, t.millitm, millis, -1);
 		c.caller = []()->void {push_msg<Thread_T>(msg_timer_activate()); };
-		timeb t;
-		ftime(&t);
-		c.millis_last_cal = t.millitm;
-		c.second_last_cal = t.time;
-		p_period_cal->regist(c);
+        thread_sentinel->regist(c);
 	}
 
 	template <typename Thread_T>
 	static void unregist_timer() noexcept(false)
 	{
+        std::call_once(crt_frame::thread_sentinel_intialized, crt_frame::init_sentinel);
 		Type_character_id id = typeid(Thread_T).hash_code();
-		p_period_cal->unregist(id);
+        thread_sentinel->unregist(id);
 	}
 
 	template <typename Thread_T, typename T>
@@ -110,7 +97,6 @@ public:
 		{
 			return false;
 		}
-		/*when you reach here, the thread object is found and protected from destroyed*/
 		using type_msg = typename std::remove_reference<T>::type;
 		std::shared_ptr<wrapped_message<type_msg>> p_msg;
 		try
@@ -164,7 +150,6 @@ public:
 		int pl_index = -1;
 		Thread_T *p_thd_obj;
 		find_thdPl_index<Thread_T>(pl_index, p_thd_obj);
-		/*when you reach here, the thread object is found and protected from destroyed*/
 		auto func_obj = std::bind(f, p_thd_obj, std::forward<A>(args)...);
 		using typeRet = decltype(func_obj());
 		std::packaged_task<typeRet()> packed_task(std::move(func_obj));
@@ -183,7 +168,6 @@ public:
 		int pl_index = -1;
 		Thread_T *p_thd_obj = nullptr;
 		find_thdPl_index<Thread_T>(pl_index, p_thd_obj);
-		/*when you reach here, the thread object is found and protected from destroyed*/
 		auto func_obj = std::bind(f, std::forward<A>(args)...);
 		using typeRet = decltype(func_obj());
 		std::packaged_task<typeRet()> packed_task(std::move(func_obj));
@@ -211,14 +195,13 @@ public:
 	template<typename F, typename ...A>
 	static decltype(auto) spawn_task_balanced(F &&f, A&& ...args)
 	{
-		auto future = std::async(f, std::forward<A>(args)...);
-		return futrue;
+        auto fut = std::async(f, std::forward<A>(args)...);
+        return fut;
 	}
 private:
 	template<typename Thread_T>
 	static void find_thdPl_index(int &pl_index, Thread_T* &p_obj) noexcept(false)
 	{
-		
 		Type_character_id id = typeid(Thread_T).hash_code();
 		for (int i = 0; i < MAX_Threads && thread_pool[i].at_thread_character_id.load(); ++i)
 		{
@@ -252,9 +235,25 @@ private:
 		thread_pool[index].at_p_thread_obj.store(p_thd_obj);
 	}
 
-	static crt_periodic_cal* init();
-private:
+    static void delayed_call(int millis, std::function<void()> fn, unsigned int id_caller)
+    {
+        std::call_once(crt_frame::thread_sentinel_intialized, crt_frame::init_sentinel);
+        timeb t;
+        ftime(&t);
+        period_cal c(id_caller, t.time, t.millitm, millis, 1);
+        c.caller = fn;
+        thread_sentinel->regist(c);
+    }
+
+    static crt_periodic_cal* init_sentinel()
+    {
+        crt_periodic_cal *p_period = new crt_periodic_cal;
+        std::thread t(&crt_periodic_cal::run, p_period);
+        t.detach();
+        return p_period;
+    }
 	static thread_unit thread_pool[MAX_Threads];
 	static std::mutex thd_pl_weak_lk;
-    static crt_periodic_cal *p_period_cal;
+    static crt_periodic_cal *thread_sentinel;
+    static std::once_flag thread_sentinel_intialized;
 };

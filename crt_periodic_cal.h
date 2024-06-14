@@ -11,6 +11,8 @@ struct period_cal
 	unsigned long millis_period;
 	int times_to_cal; /*-1: infinite >=0: exactly the times*/
 	std::function<void()> caller;
+    period_cal(unsigned int _id, unsigned long _second_last_cal, unsigned long _millis_last_cal, unsigned long _millis_period, int _times_to_cal)
+        :id(_id), second_last_cal(_second_last_cal), millis_last_cal(_millis_last_cal), millis_period(_millis_period), times_to_cal(_times_to_cal){}
 };
 
 class crt_periodic_cal
